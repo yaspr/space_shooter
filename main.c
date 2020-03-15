@@ -1,40 +1,64 @@
 /*
+  A space shooter skeleton code
+  Add sprites and reorganize for better performance.
+
+  There are no boundary checks, glitches may occur.
   
  */
-
 #include <math.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/time.h>
 
-#include "flame.h"
-
+//
 #include "pi.h"
 
+//
+#include "flame.h"
+
+//
 #define max(a, b) ((a) > (b)) ? (a) : (b)
 
+//
 #define COLOR_WHITE 0xFF
 #define COLOR_BLACK 0x00
 
+//
 #define MAX_STARS 300
 #define MAX_BOMBS 300
 #define MAX_LIVES 20
 
-#define MIN_X 20
-#define MAX_X 1800
+//
+#define PARTICLE_BOMB_TYPE   0
+#define PARTICLE_BULLET_TYPE 1
 
-#define MIN_Y 20
-#define MAX_Y 1000
+//Impact of weapon use on firepower
+#define PARTICLE_BOMB_INC   10
+#define PARTICLE_BULLET_INC 1
 
-#define MAX_FLEET 200
-
-#define MAX_BULLETS 30
-
+//Maximul distance traversed by a particle
 #define MAX_DIST 300
 
+//
+#define MIN_X 0
+#define MAX_X 1920
+
+//
+#define MIN_Y 0
+#define MAX_Y 1080
+
+//
+#define MAX_FLEET 200
+
+//
+#define MAX_BULLETS 30
+
+
+//
 #define MAX_LEVEL 100
 
+//
 #define MAX_STR 128
 
 //
@@ -44,10 +68,15 @@ typedef unsigned char byte;
 typedef struct particle_s {
 
   byte state;
+
+  byte type;
   
   //Position
   float x;
   float y;
+
+  //
+  float r;
   
   //
   float vx;
@@ -100,7 +129,7 @@ typedef struct vehicle_s {
   byte s_R, s_G, s_B;
   
   //
-  int nb_bullets;
+  int firepower;
   int max_bullets;
 
   particle_t *bullets;
@@ -108,10 +137,10 @@ typedef struct vehicle_s {
   //
   int nb_kills;
 
-  //
+  //Shield drawing step
   double s_step;
   
-  //
+  //Vehicle colors
   byte R, G, B;
 
 } vehicle_t;
@@ -153,11 +182,26 @@ static inline void limit(float *x, float *y, float s)
 //
 void draw_vehicle(flame_obj_t *fo, vehicle_t *v, byte color)
 {
+  //Vehicle color
+  byte v_R = 0, v_G = 0, v_B = 0;
+
+  //Shield color
+  byte s_R = 0, s_G = 0, s_B = 0;
+
   //
   if (color)
-    flame_set_color(fo, v->R, v->G, v->B);
-  else
-    flame_set_color(fo, 0x00, 0x00, 0x00);
+    {
+      v_R = v->R;
+      v_G = v->G;
+      v_B = v->B;
+
+      s_R = v->s_R;
+      s_G = v->s_G;
+      s_B = v->s_B;
+    }
+  
+  //
+  flame_set_color(fo, v_R, v_G, v_B);
 
   //
   flame_draw_point(fo, v->x, v->y);
@@ -167,20 +211,14 @@ void draw_vehicle(flame_obj_t *fo, vehicle_t *v, byte color)
 
   if (v->shield)
     {
-      if (color)
-	flame_set_color(fo, v->s_R, v->s_G, v->s_B);
-      else
-	flame_set_color(fo, 0x00, 0x00, 0x00);
+      flame_set_color(fo, s_R, s_G, s_B);
       
       for (double a = 0.0; a < 2 * PI; a += v->s_step)
-	flame_draw_point(fo, v->x + 2 * v->r * cos(a), v->y + 2 * v->r * sin(a));
+	flame_draw_point(fo, v->x + v->r * cos(a), v->y + v->r * sin(a));
     }
   
   //
-  if (color)
-    flame_set_color(fo, v->R, v->G, v->B);
-  else
-    flame_set_color(fo, 0x00, 0x00, 0x00);
+  flame_set_color(fo, v_R, v_G, v_B);
   
   //Delta vehicle (Triangle)
   flame_draw_line(fo,
@@ -210,8 +248,13 @@ void draw_particle(flame_obj_t *fo, particle_t *p, byte color)
     flame_set_color(fo, p->R, p->G, p->B);
   else
     flame_set_color(fo, 0x00, 0x00, 0x00);
-  
-  flame_draw_point(fo, p->x, p->y);  
+
+  //If radius is set, draw a circle, else draw a point
+  if (p->r != 0.0)
+    for (double a = 0.0; a < 2 * PI; a += 0.02)
+      flame_draw_point(fo, p->x + p->r * cos(a), p->y + p->r * sin(a));
+  else
+    flame_draw_point(fo, p->x, p->y);  
 }
 
 //
@@ -220,11 +263,11 @@ void update_vehicle(vehicle_t *v, float dt)
   v->x += v->vx * dt; 
   v->y += v->vy * dt;
 
-  /* if (v->x <= MIN_X || v->x >= MAX_X) */
-  /*   v->vx *= -1; */
+  if (v->x <= (MIN_X + v->r) || v->x >= (MAX_X - v->r))
+    v->vx *= -1;
   
-  /* if (v->y <= MIN_Y || v->y >= MAX_Y) */
-  /*   v->vy *= -1; */
+  if (v->y <= (MIN_Y + v->r) || v->y >= (MAX_Y - v->r))
+    v->vx *= -1;
 }  
 
 //
@@ -291,12 +334,12 @@ int main(int argc, char **argv)
   char header[MAX_STR];
   
   //
-  srand(getpid());
+  srand(getpid() % 13);
 
   //
   vehicle_t v;
   vehicle_t m;
-  vehicle_t fleet[MAX_FLEET];
+  vehicle_t *fleet = malloc(sizeof(vehicle_t) * MAX_FLEET);
   
  lbl_start:
   
@@ -311,15 +354,15 @@ int main(int argc, char **argv)
   
   v.shield = 1;
   v.shield_level = MAX_LEVEL;
-  
-  v.nb_bullets = 0;
+  v.s_step = 0.01;
+
+  //UFO gets 10 times more ammo than a drone
+  v.firepower = 0;
   v.max_bullets = MAX_BULLETS * 10;
 
   v.bullets = malloc(sizeof(particle_t) * MAX_BULLETS * 10);
 
   v.nb_kills = 0;
-
-  v.s_step = 0.01;
   
   v.s_R = 0;
   v.s_G = 0xFF;
@@ -330,25 +373,23 @@ int main(int argc, char **argv)
   //Mothership
   m.x = randxy(MIN_X, MAX_X);
   m.y = randxy(MIN_Y, MAX_Y);
-
   m.r = 60;
-  
   m.a = 0;
 
   m.vx = 0.5;
   m.vy = 0.5;
   
   m.shield = 1;
+  m.shield_level = MAX_LEVEL;
+  m.s_step = 0.01;
   
   m.R = 0xFF;
   m.G = 0;
   m.B = 0;
 
-  m.s_R = 0xFF;
-  m.s_G = 0;
+  m.s_R = 0;
+  m.s_G = 0xFF;
   m.s_B = 0;
-
-  m.s_step = 0.01;
   
   //Drones fleet
   fleet[0].state = 1;
@@ -364,17 +405,19 @@ int main(int argc, char **argv)
 
   fleet[0].max_force = 0.8;
   fleet[0].max_velocity = 10;
-
+  
   fleet[0].shield = 0;
 
   fleet[0].refueling = 0;
   
-  fleet[0].nb_bullets = 0;
+  fleet[0].firepower = 0;
   fleet[0].max_bullets = MAX_BULLETS;
 
   fleet[0].bullets = malloc(sizeof(particle_t));
   
+  fleet[0].bullets[0].r = 0.0;
   fleet[0].bullets[0].dist = 0;
+  fleet[0].bullets[0].type = PARTICLE_BULLET_TYPE;
   fleet[0].bullets[0].max_dist = MAX_DIST * 3;
 
   fleet[0].R = 0;
@@ -402,12 +445,14 @@ int main(int argc, char **argv)
 
       fleet[i].refueling = 0;
       
-      fleet[i].nb_bullets = 0;
+      fleet[i].firepower = 0;
       fleet[i].max_bullets = MAX_BULLETS;
       
       fleet[i].bullets = malloc(sizeof(particle_t));
       
+      fleet[i].bullets[0].r = 0.0;
       fleet[i].bullets[0].dist = 0;
+      fleet[i].bullets[0].type = PARTICLE_BULLET_TYPE;
       fleet[i].bullets[0].max_dist = MAX_DIST * 3;
       
       fleet[i].R = 0;
@@ -488,7 +533,7 @@ int main(int argc, char **argv)
 			//Up
 		      case 82:
 			draw_vehicle(fo, &v, 0);
-
+			
 			if (v.x > MIN_X && v.x < MAX_X && v.y > MIN_Y && v.y < MAX_Y)
 			  {
 			    v.x += (v.r * cos(v.a)) / 2;
@@ -496,8 +541,8 @@ int main(int argc, char **argv)
 			  }
 			else
 			  {
-			    v.x -= (v.r * cos(v.a)) / 2;
-			    v.y -= (v.r * sin(v.a)) / 2;
+			    v.x += (v.r * cos(v.a)) / 2;
+			    v.y += (v.r * sin(v.a)) / 2;
 			  }
 			
 			draw_vehicle(fo, &v, 1);
@@ -521,40 +566,77 @@ int main(int argc, char **argv)
 			draw_vehicle(fo, &v, 1);
 			break;
 
-			//Renew shield
+			//Renew shield & firepower onlu when depleated
 		      case 's':
-			v.shield = 1;
-			v.shield_level = 100.0;
-
-			v.s_R = 0;
-			v.s_G = 0xFF;
-			v.s_B = 0;
+			
+			if (v.shield == 0 || v.firepower >= v.max_bullets)
+			  {
+			    v.shield = 1;
+			    v.firepower = 0;
+			    v.shield_level = 100.0;
+			    v.s_step = 0.01;
+			    
+			    v.s_R = 0;
+			    v.s_G = 0xFF;
+			    v.s_B = 0;
+			  }
 			
 			break;
+
+			//UFO can shoot many bullets at the same time
 			
-			//Shooting
+			//Shooting bullets
 		      case ' ':
 			
-			if (v.nb_bullets < v.max_bullets)
+			if (v.firepower < v.max_bullets)
 			  {
 			    v.shooting = 1;
 
-			    v.bullets[v.nb_bullets].state = 1;
+			    v.bullets[v.firepower].state = 1;
 			    
-			    v.bullets[v.nb_bullets].x = v.x;
-			    v.bullets[v.nb_bullets].y = v.y;
+			    v.bullets[v.firepower].x = v.x;
+			    v.bullets[v.firepower].y = v.y;
 			    
-			    v.bullets[v.nb_bullets].vx = v.r * cos(v.a) * 5;
-			    v.bullets[v.nb_bullets].vy = v.r * sin(v.a) * 5;
+			    v.bullets[v.firepower].vx = v.r * cos(v.a) * 5;
+			    v.bullets[v.firepower].vy = v.r * sin(v.a) * 5;
 
-			    v.bullets[v.nb_bullets].dist = 0;
-			    v.bullets[v.nb_bullets].max_dist = MAX_DIST / dt;
+			    v.bullets[v.firepower].r = 0.0;
+			    v.bullets[v.firepower].dist = 0;
+			    v.bullets[v.firepower].type = PARTICLE_BULLET_TYPE;
+			    v.bullets[v.firepower].max_dist = MAX_DIST / dt;
 			    
-			    v.bullets[v.nb_bullets].R = 0xFF;
-			    v.bullets[v.nb_bullets].G = 0xFF;
-			    v.bullets[v.nb_bullets].B = 0xFF;
+			    v.bullets[v.firepower].R = 0xFF;
+			    v.bullets[v.firepower].G = 0xFF;
+			    v.bullets[v.firepower].B = 0xFF;
 			    
-			    v.nb_bullets++;
+			    v.firepower += PARTICLE_BULLET_INC;
+			  }
+			break;
+
+			//Shooting bombs (10 bullets)
+		      case 'b':
+			if (v.firepower < v.max_bullets - PARTICLE_BOMB_INC)
+			  {
+			    v.shooting = 1;
+
+			    v.bullets[v.firepower].state = 1;
+			    
+			    v.bullets[v.firepower].x = v.x;
+			    v.bullets[v.firepower].y = v.y;
+			    
+			    v.bullets[v.firepower].vx = v.r * cos(v.a) * 5;
+			    v.bullets[v.firepower].vy = v.r * sin(v.a) * 5;
+
+			    v.bullets[v.firepower].r = 5;
+			    v.bullets[v.firepower].dist = 0;
+			    v.bullets[v.firepower].type = PARTICLE_BOMB_TYPE;
+			    v.bullets[v.firepower].max_dist = MAX_DIST / dt;
+			    
+			    v.bullets[v.firepower].R = 0xFF;
+			    v.bullets[v.firepower].G = 0xFF;
+			    v.bullets[v.firepower].B = 0xFF;
+			    
+			    v.firepower += PARTICLE_BOMB_INC;
 			  }
 			break;
 		      }
@@ -585,10 +667,10 @@ int main(int argc, char **argv)
 	  goto lbl_start;
 	}
       
-      //
+      //If UFO is sooting
       if (v.shooting)
 	{
-	  for (unsigned i = 0; i < v.nb_bullets; i++)
+	  for (unsigned i = 0; i < v.firepower; i++)
 	    {
 	      if (v.bullets[i].state)
 	      	{
@@ -599,36 +681,75 @@ int main(int argc, char **argv)
 		      draw_particle(fo, &v.bullets[i], 1);
 		      
 		      v.bullets[i].dist++;
-
+		      
 		      //Check collision with an attack drone
 		      //If drone not killed and if not refueling
 		      for (unsigned j = 0; j < MAX_FLEET; j++)
 			if (fleet[j].state && !fleet[j].refueling)
-			  if (dist(v.bullets[i].x, v.bullets[i].y, fleet[j].x, fleet[j].y) < fleet[j].r)
+			  if (dist(v.bullets[i].x, v.bullets[i].y, fleet[j].x, fleet[j].y) <= (v.bullets[j].r + fleet[j].r))
 			    {
 			      //Drone is shot
 			      fleet[j].state = 0;
 			      
 			      draw_vehicle(fo, &fleet[j], 0);
 			      
-			      //Bullet is done
-			      v.bullets[i].state = 0;
+			      //Only erase bullets 
+			      if (v.bullets[i].type == PARTICLE_BULLET_TYPE)
+				{
+				  v.bullets[i].state = 0;
+				  draw_particle(fo, &v.bullets[i], 0);
+				}
 			      
-			      draw_particle(fo, &v.bullets[i], 0);
-
 			      v.nb_kills++;
 			    }
+
+		      //If bullet hits the motership
+		      if (dist(v.bullets[i].x, v.bullets[i].y, m.x, m.y) <= (v.bullets[i].r + m.r))
+			{
+			  v.bullets[i].state = 0;
+			  draw_particle(fo, &v.bullets[i], 0);
+			  
+			  //
+			  if (v.bullets[i].type == PARTICLE_BULLET_TYPE)
+			    {
+			      m.shield_level -= 1;
+			      draw_vehicle(fo, &m, 0);
+			      m.s_step += (dt / 1000);
+			    }
+			  else
+			    if (v.bullets[i].type == PARTICLE_BOMB_TYPE)
+			      {
+				m.shield_level -= 2;
+				draw_vehicle(fo, &m, 0);
+				m.s_step += (dt / 500);
+			      }
+			}
+
+		      //
+		      if (m.shield && m.shield_level <= (MAX_LEVEL / 2.0))
+			{
+			  m.s_R = 0xFF;
+			  m.s_G = 0;
+			  m.s_B = 0;
+			}
+		      
+		      //Mother board shield is down ==> explosion
+		      if (m.shield_level < 0.0)
+			goto lbl_start;
 		    }
 		  else
 		    {
-		      v.bullets[i].state = 0;
-		      
-		      draw_particle(fo, &v.bullets[i], 0);
+		      if (v.bullets[i].type == PARTICLE_BULLET_TYPE)
+			{
+			  v.bullets[i].state = 0;
+			  draw_particle(fo, &v.bullets[i], 0);
+			}
 		    }
 		}
 	      else
 		{
-		  draw_particle(fo, &v.bullets[i], 0);	
+		  if (v.bullets[i].type == PARTICLE_BULLET_TYPE)
+		    draw_particle(fo, &v.bullets[i], 0);
 		}
 	    }
 	}
@@ -640,7 +761,7 @@ int main(int argc, char **argv)
 	    {
 	      draw_vehicle(fo, &fleet[i], 0);
 
-	      if (fleet[i].nb_bullets >= fleet[i].max_bullets)
+	      if (fleet[i].firepower >= fleet[i].max_bullets)
 		{
 		  fleet[i].refueling = 1;
 
@@ -656,7 +777,7 @@ int main(int argc, char **argv)
 		      if (time_count >= 2000)
 			{
 			  fleet[i].refueling = 0;
-			  fleet[i].nb_bullets = 0;
+			  fleet[i].firepower = 0;
 			  
 			  seek_vehicle(&fleet[i], v.x, v.y, dt);
 
@@ -674,12 +795,14 @@ int main(int argc, char **argv)
 		    }
 		}
 	      
-	      //If distant from target
+	      //If distant from target then seek target
 	      if (dist(fleet[i].x, fleet[i].y, v.x, v.y) > (10 * v.r + fleet[i].r))
 		{
-		  if (fleet[i].nb_bullets < fleet[i].max_bullets)
+		  //If drone is low on ammo seek mother ship for refueling
+		  if (fleet[i].firepower < fleet[i].max_bullets)
 		    seek_vehicle(&fleet[i], v.x, v.y, dt);
 
+		  //Change color when refueling
 		  if (!fleet[i].refueling)
 		    {
 		      fleet[i].R = 0;
@@ -687,13 +810,13 @@ int main(int argc, char **argv)
 		      fleet[i].B = 0xFF;
 		    }
 		}
-	      else
+	      else //If close to target then start shooting (shoot 1 bullet at a time but very fast)
 		{
 		  //
 		  if (!fleet[i].bullets[0].state)
 		    {
-		      //
-		      if (fleet[i].nb_bullets < fleet[i].max_bullets)
+		      //If still 
+		      if (fleet[i].firepower < fleet[i].max_bullets)
 			{		  
 			  fleet[i].R = 0xFF;
 			  fleet[i].G = 0;
@@ -713,7 +836,7 @@ int main(int argc, char **argv)
 			  fleet[i].bullets[0].G = 0xFF;
 			  fleet[i].bullets[0].B = 0xFF;
 			  
-			  fleet[i].nb_bullets++;
+			  fleet[i].firepower++;
 			}
 		    }
 		}
@@ -732,14 +855,19 @@ int main(int argc, char **argv)
 		      if (dist(fleet[i].bullets[0].x, fleet[i].bullets[0].y, v.x, v.y) <= v.r)
 			{
 			  draw_particle(fo, &fleet[i].bullets[0], 0);
-
+			  
 			  fleet[i].bullets[0].state = 0;
 			  
 			  //
 			  if (v.shield_level > 0.0)
-			    v.shield_level -= (2.0 * dt);
+			    {
+			      v.shield_level -= (dt);
 
-			  //Less than 50%
+			      draw_vehicle(fo, &v, 0);
+			      v.s_step += (dt / 500.0);
+			    }
+			  
+			  //Shield level less than 50% ==> draw in red
 			  if (v.shield_level > 0.0 && v.shield_level < (MAX_LEVEL / 2.0))
 			    {
 			      //Turn the shield red
@@ -747,15 +875,15 @@ int main(int argc, char **argv)
 			      v.s_G = 0;
 			      v.s_B = 0;
 			    }
-		      
+			  
 			  //
-			  if (v.shield_level <= 0)
+			  if (v.shield_level < 0.0)
 			    {
 			      //Drop shield
 			      v.shield_level = 0.0;
-				  
+			      
 			      draw_vehicle(fo, &v, 0);
-
+			      
 			      v.shield = 0;
 			    }		      
 			}
@@ -777,11 +905,17 @@ int main(int argc, char **argv)
 	}
       
       //
-      sprintf(header, "Shield: %10.3f    Bullets: %5d / %5d    Nb kills: %d", v.shield_level, v.nb_bullets, v.max_bullets, v.nb_kills);
-      
+      sprintf(header, "UFO        Shield: %10.3f    Firepower: %4d / %4d    Nb kills: %4d / %4d", v.shield_level, v.firepower, v.max_bullets, v.nb_kills, MAX_FLEET);
+
+      //
       flame_set_color(fo, 0xFF, 0xFF, 0xFF);
       flame_draw_text(fo, 100, 100, header);
-      
+
+      sprintf(header, "Mothership Shield: %10.3f    Drones : %4d / %4d", m.shield_level, (MAX_FLEET - v.nb_kills), MAX_FLEET);
+
+      //
+      flame_set_color(fo, 0xFF, 0, 0);
+      flame_draw_text(fo, 100, 120, header);
     }
   
   //
@@ -789,7 +923,9 @@ int main(int argc, char **argv)
     free(fleet[i].bullets);
   
   free(v.bullets);
-  
+
+  free(fleet);
+
   //
   flame_close(fo);
 
